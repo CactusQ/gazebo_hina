@@ -53,37 +53,21 @@ private:
 
         //gzerr << "Get H: " << msg->x() << " " << msg->y() << " "  << terrain->getHeightAtPoint(msg->x(), msg->y()) << std::endl;
 
-        auto terrain_position = Ogre::Vector3(msg->x(), msg->y(), 0);
-        gzerr << "================================+" << std::endl;
-
-        int x_start = terrain_position.x;
-        int y_start = terrain_position.y;
-        int padding = 6;
-        bool changed = false;
-        for (int x = x_start-padding/2; x < x_start+padding; x++){
-            for (int y = x_start-padding/2; y < x_start+padding; y++){
-            
-                auto added_height = 0.001;
-                auto new_height = terrain->getHeightAtPoint(x, y);
-
-                gzerr << "new height: " << x << " " << y << " " << new_height << std::endl;
-
-                new_height += added_height;
-                terrain->setHeightAtPoint(x,y,new_height);
-                changed = true;
-            }
-        }
+        auto position_xy = Ogre::Vector3(msg->x(),msg->y(), 0);
+        ModifyTerrain::modify(heightmap, position_xy, 0.0003, 0.0002, 1.0, "lower",
+                    [&terrain](long x, long y) { return terrain->getHeightAtPoint(x, y); },
+                    [&terrain](long x, long y, float value) { terrain->setHeightAtPoint(x, y, value); }
+        );
 
         //terrain->setHeightAtPoint(msg->x(), msg->y(), msg->z());
-        // gzerr << "Set H: " << msg->x() << " " << msg->y() << " "  << msg->z() << std::endl;
-        if (changed) {
+        gzerr << "Set H: " << msg->x() << " " << msg->y() << " "  << msg->z() << std::endl;
+
         terrain->updateGeometry();
         gzerr << "updateGeometry Geom" << std::endl;
 
         terrain->updateDerivedData(false,
             Ogre::Terrain::DERIVED_DATA_NORMALS | Ogre::Terrain::DERIVED_DATA_LIGHTMAP);
         gzerr << "updateGeometry DerivedData" << std::endl;
-        }
 
     }
 
@@ -97,8 +81,8 @@ private:
     }
 
 private:
-    gazebo::rendering::ScenePtr scene = nullptr;
-    gazebo::rendering::Heightmap* heightmap= nullptr;
+    gazebo::rendering::ScenePtr scene;
+    gazebo::rendering::Heightmap* heightmap;
     transport::NodePtr node;
     transport::SubscriberPtr heightUpdatesSub;
     event::ConnectionPtr on_update_connection_;

@@ -25,53 +25,22 @@ void ModifyTerrain::modify(Heightmap* heightmap,
     terrain->getTerrainPosition(terrain_position, &heightmap_position);
 
     auto size = static_cast<int>(terrain->getSize());
-    auto left = max(int((heightmap_position.x - outside_radius) * size), 0);
-    auto top = max(int((heightmap_position.y - outside_radius) * size), 0);
-    auto right = min(int((heightmap_position.x + outside_radius) * size), size);
-    auto bottom = min(int((heightmap_position.y + outside_radius) * size), size);
+    gzerr << "================================+" << std::endl;
 
-    auto average_height = op == "flatten" || op == "smooth" ?
-        heightmap->AvgHeight(Conversions::ConvertIgn(heightmap_position), outside_radius) :
-        0.0;
+    int x_start = terrain_position.x;
+    int y_start = terrain_position.y;
+    int padding = 6;
 
-    for (auto y = top; y <= bottom; ++y)
-        for (auto x = left; x <= right; ++x)
-        {
-            auto ts_x_dist = x / static_cast<double>(size) - heightmap_position.x;
-            auto ts_y_dist = y / static_cast<double>(size)  - heightmap_position.y;
-            auto dist = sqrt(ts_y_dist * ts_y_dist + ts_x_dist * ts_x_dist);
-
-            auto inner_weight = 1.0;
-            if (dist > inside_radius)
-            {
-                inner_weight = ignition::math::clamp(dist / outside_radius, 0.0, 1.0);
-                inner_weight = 1.0 - (inner_weight * inner_weight);
-            }
-
-            auto added_height = 0.0001;
+    for (int x = x_start-padding/2; x < x_start+padding; x++){
+        for (int y = x_start-padding/2; y < x_start+padding; y++){
+        
+            auto added_height = 0.001;
             auto new_height = get_height_value(x, y);
 
-            if (op == "raise")
-                new_height += added_height;
-            else if (op == "lower")
-                new_height -= added_height;
-            else if (op == "flatten")
-            {
-                if (new_height < average_height)
-                    new_height += added_height;
-                else
-                    new_height -= added_height;
-            }
-            else if (op == "smooth")
-            {
-                if (new_height < average_height)
-                    new_height += added_height;
-                else
-                    new_height -= added_height;
-            }
-            else
-                gzerr << "Unknown terrain operation[" << op << "]" << endl;
+            gzerr << "new height: " << x << " " << y << " " << new_height << std::endl;
 
+            new_height += added_height;
             set_height_value(x, y, new_height);
         }
+    }
 }

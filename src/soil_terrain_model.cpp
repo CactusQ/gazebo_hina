@@ -1,5 +1,9 @@
 #include <gazebo/common/common.hh>
+#include <gazebo/msgs/msgs.hh>
 #include <gazebo/physics/physics.hh>
+#include <gazebo/transport/transport.hh>
+
+
 #include "modify_terrain.h"
 #include "shared_constants.h"
 
@@ -7,156 +11,118 @@ using namespace gazebo;
 
 class SoilTerrainModel : public ModelPlugin
 {
-    public: void Load(physics::ModelPtr model, sdf::ElementPtr /*sdf*/)
-    {
-        gzlog << "SoilTerrainModel: successfully loaded!" << std::endl;
-
-        this->model_ = model;
-
-        this->on_update_connection_ = event::Events::ConnectPostRender(
-            std::bind(&SoilTerrainModel::onUpdate, this));
-
-        hole_drilled_ = false;
-        plugin_load_time_ = gazebo::common::Time::GetWallTime();
-        contactManager = model->GetWorld()->Physics()->GetContactManager();
-        contactManager->Init(model->GetWorld());
-        contactManager->SetNeverDropContacts(true);
-
-        heightmap = getHeightmap();
-        if (heightmap == nullptr)
+    public:
+        void Load(physics::ModelPtr parent, sdf::ElementPtr /*sdf*/)
         {
-            gzerr << "SoilTerrainModel: Couldn't acquire heightmap!" << std::endl;
-            return;
+            this->model = parent;
+            this->onUpdateConnection = event::Events::ConnectWorldUpdateBegin(
+                std::bind(&SoilTerrainModel::onUpdate, this));
+
+
+            node = transport::NodePtr(new transport::Node());     
+            node->Init(model->GetWorld()->Name());
+            transport::run();
+            heightUpdatesPub = node->Advertise<msgs::Vector3d>("/gazebo/gazebo_hina/new_height");
+
+            pluginLoadTime = common::Time::GetWallTime();
+            contactManager = model->GetWorld()->Physics()->GetContactManager();
+            contactManager->Init(model->GetWorld());
+            contactManager->SetNeverDropContacts(true);
+
+            auto collision = model->GetLink("terrain-link")->GetCollision("collision");
+            heightMapShape = boost::dynamic_pointer_cast<physics::HeightmapShape>(collision->GetShape());
+            gzlog << "SoilTerrainModel plugin: heightmap shape ["
+                << heightMapShape->VertexCount().X() << ", " << heightMapShape->VertexCount().Y() << "]" << std::endl;
+            gzlog << "SoilTerrainModel: successfully loaded!" << std::endl;
+
+            /* Update Visual
+            msgs::Visual visualMsg;
+            visualPub = this->node->Advertise<msgs::Visual>("~/visual", 10);
+
+            // Set the visual's name. This should be unique.
+            visualMsg.set_name("terrain-visual");
+
+            // Set the visual's parent. This visual will be attached to the parent
+            visualMsg.set_parent_name(_parent->GetScopedName());
+
+            // Create a cylinder
+            msgs::Geometry *geomMsg = visualMsg.mutable_geometry();
+            geomMsg->set_type(msgs::Geometry::CYLINDER);
+            geomMsg->mutable_cylinder()->set_radius(1);
+            geomMsg->mutable_cylinder()->set_length(.1);
+
+            // Set the material to be bright red
+            visualMsg.mutable_material()->mutable_script()->set_name(
+                "Gazebo/RedGlow");
+
+            // Set the pose of the visual relative to its parent
+            msgs::Set(visualMsg.mutable_pose(),
+                ignition::math::Pose3d(0, 0, 0.6, 0, 0, 0));
+
+            // Don't cast shadows
+            visualMsg.set_cast_shadows(false);
+
+            visPub->Publish(visualMsg);
+            */
         }
 
-        heightmap_shape = getHeightmapShape();
-        if (heightmap_shape == nullptr)
+        void onUpdate()
         {
-            gzerr << "SoilTerrainModel: Couldn't acquire heightmap shape!" << std::endl;
-            return;
-        }
-    }
+            if (gazebo::common::Time::GetWallTime().sec - pluginLoadTime.sec < SharedConstants::WARM_UP_PERIOD_IN_SECONDS)
+                return;
 
-    rendering::Heightmap* getHeightmap()
-    {
-        auto scene = rendering::get_scene();
-        if (!scene)
-        {
-            gzerr << "SoilTerrainModel: Couldn't acquire scene!" << std::endl;
-            return nullptr;
-        }
+            gazebo::msgs::PointCloud heightUpdatesMsg;
 
-        auto heightmap = scene->GetHeightmap();
-        if (heightmap == nullptr)
-        {
-            gzerr << "SoilTerrainModel: scene has no heightmap!" << std::endl;
-            return nullptr;
-        }
-        return heightmap;
-    }
+            for (auto &contact : contactManager->GetContacts())
+            {          
+                if (contact->collision1->GetModel() == model || contact->collision2->GetModel() == model)
+                {
+                    physics::Collision *terrainCollision = contact->collision1->GetModel() == model ? contact->collision1 : contact->collision2;
+                    physics::Collision *wheelCollision = contact->collision1->GetModel() == model ? contact->collision2 : contact->collision1;
 
-    physics::HeightmapShapePtr getHeightmapShape()
-    {
-        if (model_ == nullptr)
-        {
-            gzerr << "SoilTerrainModel plugin: Couldn't acquire heightmap model!" << std::endl;
-            return nullptr;
-        }
+                    double worldX  = wheelCollision->WorldPose().Pos().X();
+                    double worldY  = wheelCollision->WorldPose().Pos().Y();
 
-        auto collision = model_->GetLink("terrain-link")->GetCollision("collision");
-        if (collision == nullptr)
-        {
-            gzerr << "SoilTerrainModel plugin: Couldn't acquire heightmap model collision!" << std::endl;
-            return nullptr;
-        }
-        
-        auto shape = boost::dynamic_pointer_cast<physics::HeightmapShape>(collision->GetShape());
-        if (shape == nullptr)
-        {
-            gzerr << "SoilTerrainModel plugin: Couldn't acquire heightmap model collision!" << std::endl;
-            return nullptr;
-        }            
+                    // coordinate transform from regular Word (x,y) to the HeightmapShape (index_x,index_y)
+                    // source: https://answers.gazebosim.org//question/17167/how-to-get-the-terrain-elevation-z-at-specific-xy-location/
+                    auto size = this->heightMapShape->Size(); 
+                    auto vc = this->heightMapShape->VertexCount();
 
-        gzlog << "SoilTerrainModel plugin: heightmap shape ["
-            << shape->VertexCount().X() << ", " << shape->VertexCount().Y() << "]" << std::endl;
+                    int indexX = (((worldX + size.X()/2)/size.X())*vc.X()-1);
+                    int indexY = (((-worldY + size.Y()/2)/size.Y())*vc.Y()-1);
 
-        return shape;
-    }
+                    double newHeight =  this->heightMapShape->GetHeight(indexX, indexY) - 0.0005; // TODO CHANGE
+                    this->heightMapShape->SetHeight(indexX, indexY, newHeight); 
+                    std::cout << "(" << worldX << " " << worldY << ") / (" << indexX << " " << indexY  << ") = " << newHeight << std::endl;
 
-    static inline float getHeightInWorldCoords(const physics::HeightmapShapePtr& heightmap_shape, int x, int y)
-    {
-        auto value = heightmap_shape->GetHeight(x, heightmap_shape->VertexCount().Y() - y - 1);
-        value += heightmap_shape->Pos().Z();
-        return value;
-    }
+                    gazebo::msgs::Vector3d newHeightMsg;
+                    newHeightMsg.set_x(indexX);
+                    newHeightMsg.set_y(indexY);
+                    newHeightMsg.set_z(newHeight);                
+                    //heightUpdatesMsg.add_points(newHeightMsg);
+                    heightUpdatesPub->Publish(newHeightMsg);
 
-    static inline void setHeightFromWorldCoords(const physics::HeightmapShapePtr& heightmap_shape, int x, int y, float value)
-    {
-        value -= heightmap_shape->Pos().Z();
-        heightmap_shape->SetHeight(x, heightmap_shape->VertexCount().Y() - y - 1, value);
-    }
-
-    void drillTerrainAt(double x, double y)
-    {
-        auto position_xy = Ogre::Vector3(x, y, 0);
-        Ogre::Vector3 heightmap_position;
-        auto terrain = heightmap->OgreTerrain()->getTerrain(0, 0);
-
-        if (!terrain)
-        {
-            gzerr << "DynamicTerrain: Heightmap has no associated terrain object!" << std::endl;
-            return;
+                    // Get child link
+                    // link->add force
+                }
+            }
+            if (heightUpdatesMsg.points_size() != 0)
+            {
+            }
         }
 
-        terrain->getTerrainPosition(position_xy, &heightmap_position);
-        /*
+    private:
+        transport::NodePtr node;
+        physics::HeightmapShapePtr heightMapShape;
+        transport::PublisherPtr heightUpdatesPub;
+        transport::PublisherPtr visualPub;
 
-        ModifyTerrain::modify(heightmap, position_xy, 0.003, 0.002, 1.0, "lower",
-            [&heightmap_shape](int x, int y) { return getHeightInWorldCoords(heightmap_shape, x, y); },
-            [&heightmap_shape](int x, int y, float value) { setHeightFromWorldCoords(heightmap_shape, x, y, value); }
-        );
-        */
+        physics::ModelPtr model;
+        gazebo::physics::ContactManager *contactManager;
 
-        hole_drilled_ = true;
-        gzlog << "SoilTerrainModel: A hole has been drilled at ("
-            << position_xy.x << ", " << position_xy.y << ")" << std::endl;
-    }
-
-    void onUpdate()
-    {
-        if (gazebo::common::Time::GetWallTime().sec - plugin_load_time_.sec < SharedConstants::WARM_UP_PERIOD_IN_SECONDS)
-            return;
-
-        for (auto &contact : contactManager->GetContacts())
-        {          
-          if (contact->collision1->GetModel() == model_ || contact->collision2->GetModel() == model_)
-          {
-            physics::Collision *terrainCollision = contact->collision1->GetModel() == model_ ? contact->collision1 : contact->collision2;
-            physics::Collision *wheelCollision = contact->collision1->GetModel() == model_ ? contact->collision2 : contact->collision1;
-
-            int x  = model_->WorldPose().Pos().X();
-            int y  = model_->WorldPose().Pos().Y();
-            drillTerrainAt(x, y);
-            std::cout << x << " / " << y << std::endl;
-          }
-          else
-          {
-            std::cout << " No Update " << std::endl;
-          }
-        }
-    }
-
-private:
-    rendering::Heightmap* heightmap;
-    physics::HeightmapShapePtr heightmap_shape;
-
-    physics::ModelPtr model_;
-    gazebo::physics::ContactManager *contactManager;
-
-    event::ConnectionPtr on_update_connection_;
-    bool hole_drilled_;
-    common::Time plugin_load_time_;
-};
+        event::ConnectionPtr onUpdateConnection;
+        common::Time pluginLoadTime;
+    };
 
 // Register this plugin with the simulator
 GZ_REGISTER_MODEL_PLUGIN(SoilTerrainModel)
