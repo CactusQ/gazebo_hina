@@ -121,7 +121,6 @@ class SoilTerrainModel : public ModelPlugin
         }
 
     private:
-        ros::Publisher 
         transport::NodePtr node;
         physics::HeightmapShapePtr heightMapShape;
         transport::PublisherPtr heightUpdatesPub;
