@@ -2,6 +2,7 @@
 #include <gazebo/msgs/msgs.hh>
 #include <gazebo/physics/physics.hh>
 #include <gazebo/transport/transport.hh>
+#include <ros/ros.h>
 
 
 #include "modify_terrain.h"
@@ -27,7 +28,7 @@ class SoilTerrainModel : public ModelPlugin
             pluginLoadTime = common::Time::GetWallTime();
             contactManager = model->GetWorld()->Physics()->GetContactManager();
             contactManager->Init(model->GetWorld());
-            contactManager->SetNeverDropContacts(true);
+            contactManager->SetNeverDropContacts(false);
 
             auto collision = model->GetLink("terrain-link")->GetCollision("collision");
             heightMapShape = boost::dynamic_pointer_cast<physics::HeightmapShape>(collision->GetShape());
@@ -72,7 +73,15 @@ class SoilTerrainModel : public ModelPlugin
                 return;
 
             gazebo::msgs::PointCloud heightUpdatesMsg;
+            std::cout << "Contacts: "  <<  contactManager->GetContacts().size() << std::endl;
 
+            int positions = 0;
+            for (auto &contact : contactManager->GetContacts())
+            { 
+                if (contact->collision1->GetModel() == model || contact->collision2->GetModel() == model)  
+                    positions += contact->count;     
+            }
+            std::cout << "Positions: "  <<  positions << std::endl;
             for (auto &contact : contactManager->GetContacts())
             {          
                 if (contact->collision1->GetModel() == model || contact->collision2->GetModel() == model)
@@ -93,7 +102,7 @@ class SoilTerrainModel : public ModelPlugin
 
                     double newHeight =  this->heightMapShape->GetHeight(indexX, indexY) - 0.0005; // TODO CHANGE
                     this->heightMapShape->SetHeight(indexX, indexY, newHeight); 
-                    std::cout << "(" << worldX << " " << worldY << ") / (" << indexX << " " << indexY  << ") = " << newHeight << std::endl;
+                    //std::cout << "(" << worldX << " " << worldY << ") / (" << indexX << " " << indexY  << ") = " << newHeight << std::endl;
 
                     gazebo::msgs::Vector3d newHeightMsg;
                     newHeightMsg.set_x(indexX);
@@ -112,6 +121,7 @@ class SoilTerrainModel : public ModelPlugin
         }
 
     private:
+        ros::Publisher 
         transport::NodePtr node;
         physics::HeightmapShapePtr heightMapShape;
         transport::PublisherPtr heightUpdatesPub;
